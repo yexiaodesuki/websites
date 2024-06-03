@@ -195,7 +195,7 @@ class LoginPage(QWidget):
         if self.current_role == 'patient':
             patient_id = self.get_patient_id(account)
             if patient_id and self.patient_login(account, password):
-                self.main_window.current_user_id = patient_id  # 保存当前用户的身份证号
+                self.main_window.current_user_id = patient_id  
                 self.main_window.show_patient_page()
             else:
                 QMessageBox.warning(self, "错误", "账号或密码错误！")
@@ -216,23 +216,20 @@ class LoginPage(QWidget):
     def patient_login(self, account, password):
         conn = create_connection()
         cursor = conn.cursor()
-        cursor.callproc('PatientLogin', (account, password, None))
-        result = cursor.fetchall()
+        result=cursor.callproc('PatientLogin', (account, password,''))
         cursor.close()
         conn.close()
-        return result is not None
+        return bool(result[2])
     
 
     def admin_login(self, account, password):
         conn = create_connection()
         cursor = conn.cursor()
-        cursor.callproc('AdminLogin', (account, password, None))
-        result = cursor.fetchall()
+        result=cursor.callproc('AdminLogin', (account, password,''))
         cursor.close()
         conn.close()
-        return result is not None
+        return bool(result[2])
         
-
     def show_patient_login(self):
         self.current_role = 'patient'
     
@@ -299,6 +296,11 @@ class PatientPage(QWidget):
             try:
                 conn = create_connection()
                 cursor = conn.cursor()
+                cursor.execute("SELECT * FROM 预约 WHERE 患者身份证号 = %s AND 状态 = '未就诊'", (patient_id,))
+                result = cursor.fetchone()
+                if not result:
+                    QMessageBox.warning(dialog, "错误", "当前没有未就诊的挂号记录！")
+                    return
                 cursor.callproc('UpdateAppointmentStatus', (patient_id,))
                 conn.commit()
                 cursor.close()
@@ -769,33 +771,36 @@ class AdminPage(QWidget):
 
         ok_button = QPushButton("确认")
         layout.addWidget(ok_button)
+        
         def _handle_check_bill_info():
-            bill_id = id_input.text()
-            if not bill_id:
+            patient_id = id_input.text()
+            if not patient_id:
                 QMessageBox.warning(dialog, "警告", "请输入患者身份证号")
                 return
+            
             try:
                 conn = create_connection()
                 cursor = conn.cursor()
-                result = cursor.callproc('GetBillInfo', (bill_id,''))
-                if result:
-                    for bill_info in result:  
-                        dialog = QDialog()
-                        dialog.setWindowTitle("查询账单信息")
-                        layout = QVBoxLayout(dialog)
-                        result_label = QLabel(bill_info)
-                        layout.addWidget(result_label)
-                        dialog.exec_()
-                else:
-                    QMessageBox.information(dialog, "信息", "未找到该患者的账单")
+                result = cursor.callproc('GetBillInfo', (patient_id, ''))
+                bill_info = result[-1]  
+                print(bill_info)
                 cursor.close()
                 conn.close()
-                dialog.accept()
+                dialog = QDialog()
+                dialog.setWindowTitle("查询账单信息")
+                layout = QVBoxLayout(dialog)
+                
+                result_label = QLabel(bill_info)
+                layout.addWidget(result_label)
+                
+                dialog.exec_()
             except pymysql.Error as e:
-                QMessageBox.critical(dialog, "错误", f"查询账单信息失败：{str(e)}")
+                QMessageBox.critical(self, "错误", f"查询账单信息失败：{str(e)}")
         
         ok_button.clicked.connect(_handle_check_bill_info)
         dialog.exec_()
+
+
     def create_doctor(self):
         dialog = QDialog()
         dialog.setWindowTitle("添加新医生")
