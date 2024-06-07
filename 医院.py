@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
 import mysql.connector
 import pymysql
 
+
 # 创建数据库连接
 def create_connection():
     return mysql.connector.connect(
@@ -173,7 +174,16 @@ class LoginPage(QWidget):
                     return
                 conn = create_connection()
                 cursor = conn.cursor()
-
+                cursor.execute("SELECT * FROM 患者用户 WHERE 身份证号 = %s", (id,))
+                result=cursor.fetchone()
+                if result:
+                    QMessageBox.warning(dialog, "警告", "该身份证号已注册")
+                    return
+                cursor.execute("SELECT * FROM 患者用户 WHERE 账号 = %s", (account,))
+                result=cursor.fetchone()
+                if result:
+                    QMessageBox.warning(dialog, "警告", "该账号已注册")
+                    return
                 # 调用存储过程
                 cursor.callproc('RegisterUser', (id, account, password, name, gender, age, history, email, phone))
                 conn.commit()
@@ -286,31 +296,58 @@ class PatientPage(QWidget):
     
     def visit(self):
         patient_id = self.main_window.current_user_id
+        conn = create_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT*from 预约 where 患者身份证号 = %s and 状态 = '未就诊'", (patient_id,))
+        appointments= cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not appointments:
+            QMessageBox.information(self, "信息", "未找到未就诊的预约信息")
+            return
+
         dialog = QDialog()
         dialog.setWindowTitle("就诊")
         layout = QVBoxLayout(dialog)
-        ok_button = QPushButton("确认")
+
+        appointment_label = QLabel("选择就诊的预约:")
+        layout.addWidget(appointment_label)
+
+        appointment_combo = QComboBox()
+        for appointment in appointments:
+            appointment_id = appointment[0]
+            doctor_id = appointment[2]
+            appointment_time = appointment[3]
+            status = appointment[4]
+            # Add item with display text and set appointment_id as user data
+            appointment_combo.addItem(f"{appointment_id} - {doctor_id} - {appointment_time} - {status}", appointment_id)
+        layout.addWidget(appointment_combo)
+
+        ok_button = QPushButton("确定")
         layout.addWidget(ok_button)
 
-        def handle_visit():
+        def _handle_visit():
+            appointment_id = appointment_combo.currentData()
+            status = appointment_combo.currentText()
+            if status == '已就诊' :
+                QMessageBox.warning(dialog, "警告", "请选择未就诊的预约")
+                return
+
             try:
                 conn = create_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM 预约 WHERE 患者身份证号 = %s AND 状态 = '未就诊'", (patient_id,))
-                result = cursor.fetchone()
-                if not result:
-                    QMessageBox.warning(dialog, "错误", "当前没有未就诊的挂号记录！")
-                    return
-                cursor.callproc('UpdateAppointmentStatus', (patient_id,))
+                cursor.callproc('UpdateAppointmentStatus', (appointment_id,))
                 conn.commit()
+                QMessageBox.information(dialog, "成功", "就诊成功")
                 cursor.close()
                 conn.close()
-                QMessageBox.information(dialog, "成功", "成功就诊，已更新状态为'已就诊'")
                 dialog.accept()
             except pymysql.Error as e:
-                QMessageBox.critical(dialog, "错误", f"数据库错误：{str(e)}")
+                QMessageBox.critical(dialog, "错误", f"就诊失败：{str(e)}")
 
-        ok_button.clicked.connect(handle_visit)
+        ok_button.clicked.connect(_handle_visit)
+
         dialog.exec_()
     def search_patient_info(self):
         patient_id = self.main_window.current_user_id
@@ -420,7 +457,7 @@ class PatientPage(QWidget):
     def make_appointment(self):
         conn = create_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT 职工号, 科目 FROM 医生")
+        cursor.execute("SELECT 职工号, 姓名, 科目, 排班信息 FROM 医生")
         doctors = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -434,14 +471,15 @@ class PatientPage(QWidget):
 
         doctor_combo = QComboBox()
         for doctor in doctors:
-            doctor_combo.addItem(f"{doctor[0]} - {doctor[1]}", doctor[0])
+            doctor_combo.addItem(f"{doctor[0]} - {doctor[1]} - {doctor[2]} - {doctor[3]}", doctor[0])
         layout.addWidget(doctor_combo)
 
         time_label = QLabel("预约时间:")
         layout.addWidget(time_label)
 
-        time_input = QLineEdit()
-        layout.addWidget(time_input)
+        self.time_input = QDateTimeEdit()
+        self.time_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        layout.addWidget(self.time_input)
         
         priority_label = QLabel("优先级:")
         layout.addWidget(priority_label)
@@ -455,7 +493,7 @@ class PatientPage(QWidget):
 
         def _handle_make_appointment():
             doctor_id = doctor_combo.currentData()
-            time = time_input.text()
+            time = self.time_input.dateTime().toString("yyyy-MM-dd HH:mm:ss")
             patient_id = self.main_window.current_user_id
             priority=priority_input.text()
             if not doctor_id or not time or not patient_id:
@@ -507,8 +545,13 @@ class PatientPage(QWidget):
 
         appointment_combo = QComboBox()
         for appointment in appointments:
-            appointment_combo.addItem(f"{appointment[0]} - {appointment[2]} - {appointment[3]} - {appointment[4]}", appointment[0])
-        layout.addWidget(appointment_combo)
+            appointment_id = appointment[0]
+            doctor_id = appointment[2]
+            appointment_time = appointment[3]
+            status = appointment[4]
+            # Add item with display text and set appointment_id as user data
+            appointment_combo.addItem(f"{appointment_id} - {doctor_id} - {appointment_time} - {status}", appointment_id)
+            layout.addWidget(appointment_combo)
 
         ok_button = QPushButton("确定")
         layout.addWidget(ok_button)
@@ -557,41 +600,71 @@ class PatientPage(QWidget):
                 QMessageBox.critical(self, "错误", f"用户注销失败：{str(e)}")
     
     def query_bill(self):
-        bill_id = self.main_window.current_user_id
+        patient_id = self.main_window.current_user_id
+        conn = create_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT*from 账单 where 患者身份证号 = %s ", (patient_id,))
+        bills= cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not bills:
+            QMessageBox.information(self, "信息", "未找到账单的信息")
+            return
+
         dialog = QDialog()
-        dialog.setWindowTitle("查看账单")
+        dialog.setWindowTitle("支付")
         layout = QVBoxLayout(dialog)
 
+        bill_label = QLabel("选择要支付的账单:")
+        layout.addWidget(bill_label)
+
+        bill_combo = QComboBox()
+        for bill in bills:
+            bill_id = bill[0]
+            bill_time = bill[2]
+            money = bill[3]
+            status = bill[4]
+            # Add item with display text and set appointment_id as user data
+            bill_combo.addItem(f"{bill_id} - {bill_time} - {money} - {status}", (bill_id, status))
+        layout.addWidget(bill_combo)
         payment_time_label = QLabel("支付时间:")
         layout.addWidget(payment_time_label)
 
         self.payment_time_input = QDateTimeEdit()
         self.payment_time_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         layout.addWidget(self.payment_time_input)
- 
-        ok_button = QPushButton("确认")
+        payment_time = self.payment_time_input.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+
+        ok_button = QPushButton("确定")
         layout.addWidget(ok_button)
 
-        def _handle_query_bill_info():
-            payment_time = self.payment_time_input.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        def _handle_pay_bill():
+            selected_data = bill_combo.currentData()
+            if not selected_data:
+                QMessageBox.warning(dialog, "警告", "请选择一个账单")
+                return
+
+            bill_id, status = selected_data
+
+            if status == '已支付':
+                QMessageBox.warning(dialog, "警告", "请选择未支付的账单")
+                return
             try:
+                payment_time_label = QLabel("支付时间:")
+                layout.addWidget(payment_time_label) 
                 conn = create_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM 账单 WHERE 患者身份证号 = %s AND 状态 = '未支付'", (bill_id,))
-                result = cursor.fetchone()
-                if result:
-                    cursor.callproc('UpdateBillStatus', (bill_id, payment_time))
-                    conn.commit()
-                    QMessageBox.information(dialog, "成功", "更新账单状态成功")
-                else:
-                    QMessageBox.information(dialog, "信息", "未找到该患者的未支付账单")
+                cursor.callproc('UpdateBillStatus', (bill_id, payment_time))
+                conn.commit()
+                QMessageBox.information(dialog, "成功", "支付成功")
                 cursor.close()
                 conn.close()
                 dialog.accept()
             except pymysql.Error as e:
-                QMessageBox.critical(dialog, "错误", f"更新账单状态失败：{str(e)}")
+                QMessageBox.critical(dialog, "错误", f"支付失败：{str(e)}")
 
-        ok_button.clicked.connect(_handle_query_bill_info)
+        ok_button.clicked.connect(_handle_pay_bill)
         dialog.exec_()
 
 class AdminPage(QWidget):
@@ -712,15 +785,16 @@ class AdminPage(QWidget):
     def check_appointment_info(self):
         conn = create_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM 预约")
+        cursor.execute("SELECT * FROM 预约 order by 预约编号 DESC") 
         results = cursor.fetchall()
         if results:
             info_text = ""
             for result in results:
                 info_text += f"预约编号：{result[0]}\n患者身份证号：{result[1]}\n医生职工号：{result[2]}\n预约时间 ：{result[3]}\n状态：{result[4]}\npriority：{result[5]}\n"
+                info_text += "-" * 20 + "\n"  # 添加虚线分隔符
             QMessageBox.information(self, "内部用户信息", info_text)
         else:
-            QMessageBox.information(self, "信息", "未找到内部用户信息")
+            QMessageBox.information(self, "信息", "未找到预约信息")
         cursor.close()
         conn.close()
         dialog = QDialog()
@@ -759,6 +833,20 @@ class AdminPage(QWidget):
         ok_button.clicked.connect(_handle_check_appointment_info)
         dialog.exec_()
     def check_bill_info(self):
+        conn = create_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM 账单 order by 账单号 DESC")
+        results = cursor.fetchall()
+        if results:
+            info_text = ""
+            for result in results:
+                info_text += f"账单号：{result[0]}\n患者身份证号：{result[1]}\n支付时间 ：{result[2]}\n支付金额：{result[3]}\n状态：{result[4]}\n"
+                info_text += "-" * 20 + "\n"  # 添加虚线分隔符
+            QMessageBox.information(self, "账单信息", info_text)
+        else:
+            QMessageBox.information(self, "信息", "未找到账单信息")
+        cursor.close()
+        conn.close()
         dialog = QDialog()
         dialog.setWindowTitle("查看账单")
         layout = QVBoxLayout(dialog)
@@ -799,8 +887,6 @@ class AdminPage(QWidget):
         
         ok_button.clicked.connect(_handle_check_bill_info)
         dialog.exec_()
-
-
     def create_doctor(self):
         dialog = QDialog()
         dialog.setWindowTitle("添加新医生")
@@ -912,6 +998,21 @@ class AdminPage(QWidget):
         dialog.exec_()
     
     def check_doctor_info(self):
+        conn = create_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM 医生")
+        results = cursor.fetchall()
+        if results:
+            info_text = ""
+            for result in results:
+                info_text += f"职工号：{result[0]}\n姓名：{result[6]}\n性别 ：{result[7]}\n年龄：{result[8]}\n学历：{result[2]}\n房间号：{result[1]}\n职称：{result[3]}\n科目：{result[4]}\n排班信息：{result[5]}\n工资：{result[9]}\n"
+                info_text += "-" * 20 + "\n"  # 添加虚线分隔符
+            QMessageBox.information(self, "全体医生信息", info_text)
+        else:
+            QMessageBox.information(self, "信息", "未找到任何医生信息")
+        cursor.close()
+        conn.close()
+        dialog = QDialog()
         dialog = QDialog()
         dialog.setWindowTitle("查看医生信息")
         layout = QVBoxLayout(dialog)
@@ -1036,7 +1137,7 @@ class AdminPage(QWidget):
         dialog.exec_()
     def delete_doctor(self):
         dialog = QDialog()
-        dialog.setWindowTitle("删除医生")
+        dialog.setWindowTitle("开除医生")
         layout = QVBoxLayout(dialog)
 
         id_label = QLabel("职工号:")
@@ -1088,6 +1189,11 @@ class AdminPage(QWidget):
             try:
                 conn = create_connection()
                 cursor = conn.cursor()
+                cursor.execute("SELECT * FROM 患者 WHERE 身份证号 = %s", (patient_id,))
+                result=cursor.fetchone()
+                if result == None:
+                    QMessageBox.warning(dialog, "警告", "不存在该患者")
+                    return
                 cursor.callproc('DeletePatientData', (patient_id,))
                 conn.commit()
                 QMessageBox.information(dialog, "成功", "患者用户删除成功")
@@ -1218,7 +1324,13 @@ class AdminPage(QWidget):
             try:
                 conn = create_connection()
                 cursor = conn.cursor()
+                cursor.execute("SELECT * FROM 用户 WHERE 账号 = %s", (account,))
+                result=cursor.fetchone()
+                if result == None:
+                    QMessageBox.warning(dialog, "警告", "不存在该用户")
+                    return
                 cursor.callproc('DeleteUser', (account,))
+                conn.commit()
                 QMessageBox.information(dialog, "成功", "内部用户删除成功")
                 cursor.close()
                 conn.close()
