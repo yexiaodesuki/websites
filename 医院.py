@@ -1,6 +1,6 @@
 import sys
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget, QMessageBox, QDialog, QInputDialog,QComboBox,QDateTimeEdit
+    QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget, QMessageBox, QDialog, QInputDialog,QComboBox,QDateTimeEdit,QTextEdit
 )
 import mysql.connector
 import pymysql
@@ -19,6 +19,18 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("罗德岛医院管理系统")
+        self.resize(800, 600)  # 设置窗口初始大小
+
+        # 创建一个垂直布局管理器
+        layout = QVBoxLayout()
+
+        # 创建一个文本编辑框
+        self.text_edit = QTextEdit()
+        layout.addWidget(self.text_edit)
+
+        # 创建一个按钮
+        button = QPushButton("点击我")
+        layout.addWidget(button)
         
         self.stack = QStackedWidget(self)
         self.setLayout(QVBoxLayout())
@@ -626,7 +638,7 @@ class PatientPage(QWidget):
             money = bill[3]
             status = bill[4]
             # Add item with display text and set appointment_id as user data
-            bill_combo.addItem(f"{bill_id} - {bill_time} - {money} - {status}", (bill_id, status))
+            bill_combo.addItem(f"账单号：{bill_id} - 支付时间：{bill_time} - 支付金额：{money} - 状态：{status}", (bill_id, status))
         layout.addWidget(bill_combo)
         payment_time_label = QLabel("支付时间:")
         layout.addWidget(payment_time_label)
@@ -1207,11 +1219,29 @@ class AdminPage(QWidget):
         dialog.exec_()
         
     def search_patientuser_info(self):
+        conn = create_connection()
+        cursor = conn.cursor()
+        result=cursor.callproc('GetAllPatientInfo', [None])
+        allpatient_info = result[-1]   
+        cursor.close()
+        conn.close()
+
+        print(allpatient_info)  # 打印查询结果
+
         dialog = QDialog()
-        dialog.setWindowTitle("查询患者信息")
+        dialog.setWindowTitle("查询所有患者信息")
+        layout = QVBoxLayout(dialog)
+        
+        result_label = QLabel(allpatient_info)
+        layout.addWidget(result_label)
+        
+        dialog.exec_()
+        
+        dialog = QDialog()
+        dialog.setWindowTitle("查看患者")
         layout = QVBoxLayout(dialog)
 
-        id_label = QLabel("身份证号:")
+        id_label = QLabel("患者身份证号:")
         layout.addWidget(id_label)
 
         id_input = QLineEdit()
@@ -1219,7 +1249,7 @@ class AdminPage(QWidget):
 
         ok_button = QPushButton("确认")
         layout.addWidget(ok_button)
-
+        
         def _handle_search_patientuser_info():
             patient_id = id_input.text()
             if not patient_id:
